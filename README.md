@@ -4,6 +4,41 @@ Linux driver + GUI configurator for the **Thermaltake TH420 V2 Ultra EX ARGB** b
 
 No official Linux driver exists — protocol fully reverse-engineered without Windows.
 
+> **This repository is a personal fork of [messiahlap/th420-display](https://github.com/messiahlap/th420-display).**
+>
+> This fork contains an AMD hybrid-GPU detection fix tested on an **AMD Radeon RX 9070 XT + AMD integrated GPU** system. The fix is not intended to be a universal AMD GPU compatibility solution.
+
+---
+
+## Fork-specific AMD GPU detection fix
+
+The original sensor detection treated every `amdgpu` hwmon device as the integrated GPU. On systems with both an AMD discrete GPU and an AMD integrated GPU, this could cause the discrete GPU to be assigned to the wrong sensor keys.
+
+This fork distinguishes the tested AMD GPUs using their PCI device IDs:
+
+* **AMD Radeon RX 9070 XT** (`0x7550`) is treated as the discrete GPU and uses the primary `gpu_*` sensor keys.
+* **AMD Radeon 780M-class integrated GPU** (`0x164e`) is exposed through the `igpu_*` sensor keys.
+
+When no NVIDIA GPU is present, a detected AMD discrete GPU remains the primary GPU instead of incorrectly promoting the integrated GPU. If no discrete AMD GPU is detected, the integrated GPU can still be promoted to the primary `gpu_*` keys for compatibility with existing configurations.
+
+### Tested hardware
+
+* **Discrete GPU:** AMD Radeon RX 9070 XT (`PCI device ID 0x7550`)
+* **Integrated GPU:** AMD Radeon 780M-class iGPU (`PCI device ID 0x164e`)
+* **CPU:** AMD Ryzen 7 7800X3D
+* **OS:** Bazzite / Fedora Linux
+* **Kernel driver:** `amdgpu`
+
+The fix has been tested on this configuration. Other AMD GPU combinations have not been tested, so this fork makes no claim of universal AMD GPU compatibility.
+
+The changes are intended primarily for users with a similar AMD hybrid-GPU configuration.
+
+### Upstream
+
+This project is a fork of [messiahlap/th420-display](https://github.com/messiahlap/th420-display).
+
+The original project, protocol reverse-engineering, and upstream implementation remain the work of the original author. This fork contains the AMD-specific changes described above, together with local configuration/layout adjustments.
+
 ---
 
 ## Screenshots
@@ -70,34 +105,34 @@ make appimage
 
 ## Platform
 
-| | |
-|---|---|
-| **OS** | Linux (Bazzite / Fedora, tested on KDE Plasma Wayland) |
-| **CPU** | AMD Ryzen 7 7800X3D with `k10temp` + `zenergy` kernel modules |
-| **GPU** | NVIDIA RTX 4090 (NVML, driver 595+); AMD Radeon 740M iGPU (`amdgpu`) |
-| **Device** | USB HID — VID `264a` / PID `233c` |
+|            |                                                               |
+| ---------- | ------------------------------------------------------------- |
+| **OS**     | Linux (Bazzite / Fedora, tested on KDE Plasma Wayland)        |
+| **CPU**    | AMD Ryzen 7 7800X3D with `k10temp` + `zenergy` kernel modules |
+| **GPU**    | AMD Radeon RX 9070 XT + AMD integrated GPU (`amdgpu`)         |
+| **Device** | USB HID — VID `264a` / PID `233c`                             |
 
 ---
 
 ## Binaries
 
-| Binary | Role |
-|---|---|
+| Binary          | Role                                                                      |
+| --------------- | ------------------------------------------------------------------------- |
 | `th420-display` | Daemon — reads sensors, renders and pushes frames to the device in a loop |
-| `th420-config` | GUI configurator — live preview, color thresholds, daemon control |
+| `th420-config`  | GUI configurator — live preview, color thresholds, daemon control         |
 
 ---
 
 ## GUI features
 
-- **Daemon control** — start / stop with one click; status shown live
-- **Autostart** — enable / disable systemd user service (`~/.config/systemd/user/th420-display.service`)
-- **Screen rotation** — slider + quick 0° / 90° / 180° / 270° buttons
-- **Background image** — browse for any PNG/JPG, choose Cover / Contain / Stretch fit and darken level
-- **Layout presets** — Classic, Grid 2×3, Big Top, Custom (with per-sensor position and font size)
-- **Per-sensor config** — enable/disable, custom label, label color, value color gradient with thresholds
-- **Live preview** — 480×480 preview updates every 800 ms with real sensor values
-- **Config hot-reload** — daemon picks up changes instantly on every save
+* **Daemon control** — start / stop with one click; status shown live
+* **Autostart** — enable / disable systemd user service (`~/.config/systemd/user/th420-display.service`)
+* **Screen rotation** — slider + quick 0° / 90° / 180° / 270° buttons
+* **Background image** — browse for any PNG/JPG, choose Cover / Contain / Stretch fit and darken level
+* **Layout presets** — Classic, Grid 2×3, Big Top, Custom (with per-sensor position and font size)
+* **Per-sensor config** — enable/disable, custom label, label color, value color gradient with thresholds
+* **Live preview** — 480×480 preview updates every 800 ms with real sensor values
+* **Config hot-reload** — daemon picks up changes instantly on every save
 
 ---
 
@@ -105,49 +140,49 @@ make appimage
 
 ### CPU
 
-| ID | Label | Source |
-|---|---|---|
-| `cpu_temp` | CPU TEMP | `k10temp` → `Tctl` |
-| `cpu_freq` | CPU FREQ | avg `scaling_cur_freq` across all cores |
-| `cpu_util` | CPU UTIL | `/proc/stat` delta |
-| `cpu_power` | CPU PWR | `zenergy` → `Esocket0` (µJ delta / Δt) |
+| ID          | Label    | Source                                  |
+| ----------- | -------- | --------------------------------------- |
+| `cpu_temp`  | CPU TEMP | `k10temp` → `Tctl`                      |
+| `cpu_freq`  | CPU FREQ | avg `scaling_cur_freq` across all cores |
+| `cpu_util`  | CPU UTIL | `/proc/stat` delta                      |
+| `cpu_power` | CPU PWR  | `zenergy` → `Esocket0` (µJ delta / Δt)  |
 
 ### Cooling
 
-| ID | Label | Source |
-|---|---|---|
+| ID        | Label   | Source                               |
+| --------- | ------- | ------------------------------------ |
 | `coolant` | COOLANT | HID command `0x80` on ctrl interface |
 
 ### Discrete GPU (NVIDIA via NVML / AMD via sysfs)
 
-| ID | Label | Source |
-|---|---|---|
-| `gpu_temp` | GPU TEMP | NVML `TemperatureSensor::Gpu` · AMD: `amdgpu` edge |
-| `gpu_hotspot_temp` | GPU HOT | NVML `nvmlDeviceGetThermalSettings` → T.Limit |
-| `gpu_util` | GPU UTIL | NVML `utilization_rates` · AMD: `gpu_busy_percent` |
-| `gpu_power` | GPU PWR | NVML `power_usage` (mW→W) · AMD: `power1_input` |
-| `gpu_vram_pct` | VRAM | NVML `memory_info` · AMD: `mem_info_vram_*` |
+| ID                 | Label    | Source                                             |
+| ------------------ | -------- | -------------------------------------------------- |
+| `gpu_temp`         | GPU TEMP | NVML `TemperatureSensor::Gpu` · AMD: `amdgpu` edge |
+| `gpu_hotspot_temp` | GPU HOT  | NVML `nvmlDeviceGetThermalSettings` → T.Limit      |
+| `gpu_util`         | GPU UTIL | NVML `utilization_rates` · AMD: `gpu_busy_percent` |
+| `gpu_power`        | GPU PWR  | NVML `power_usage` (mW→W) · AMD: `power1_input`    |
+| `gpu_vram_pct`     | VRAM     | NVML `memory_info` · AMD: `mem_info_vram_*`        |
 
 ### Integrated GPU (AMD iGPU via sysfs — visible alongside discrete GPU)
 
-| ID | Label | Source |
-|---|---|---|
-| `igpu_temp` | iGPU TEMP | `amdgpu` hwmon `temp1_input` |
-| `igpu_util` | iGPU UTIL | `amdgpu` → `gpu_busy_percent` |
-| `igpu_power` | iGPU PWR | `amdgpu` → `power1_input` |
-| `igpu_vram_pct` | iVRAM | `amdgpu` → `mem_info_vram_*` |
+| ID              | Label     | Source                        |
+| --------------- | --------- | ----------------------------- |
+| `igpu_temp`     | iGPU TEMP | `amdgpu` hwmon `temp1_input`  |
+| `igpu_util`     | iGPU UTIL | `amdgpu` → `gpu_busy_percent` |
+| `igpu_power`    | iGPU PWR  | `amdgpu` → `power1_input`     |
+| `igpu_vram_pct` | iVRAM     | `amdgpu` → `mem_info_vram_*`  |
 
 ### Memory & Storage
 
-| ID | Label | Source |
-|---|---|---|
-| `ram_used_pct` | RAM | `/proc/meminfo` |
-| `nvme0_temp` … `nvme2_temp` | NVMe 0–2 | `nvme` hwmon |
+| ID                          | Label    | Source          |
+| --------------------------- | -------- | --------------- |
+| `ram_used_pct`              | RAM      | `/proc/meminfo` |
+| `nvme0_temp` … `nvme2_temp` | NVMe 0–2 | `nvme` hwmon    |
 | `dimm0_temp` / `dimm1_temp` | DIMM 0–1 | `spd5118` hwmon |
 
 The first 6 sensors (`cpu_temp`, `coolant`, `cpu_freq`, `cpu_util`, `cpu_power`, `gpu_temp`) are enabled by default; all others are available but off.
 
-**GPU auto-detection:** if NVML initialises successfully (NVIDIA driver present), the discrete GPU occupies the `gpu_*` keys and the `igpu_*` keys carry the AMD integrated graphics independently. On AMD-only systems the iGPU is promoted to `gpu_*` automatically — existing configs require no changes.
+**GPU auto-detection:** if NVML initialises successfully (NVIDIA driver present), the discrete NVIDIA GPU occupies the `gpu_*` keys and the AMD integrated graphics remain available through the `igpu_*` keys. On systems without NVIDIA, a detected AMD discrete GPU remains on the primary `gpu_*` keys. If no discrete AMD GPU is detected, the integrated GPU is promoted to the primary `gpu_*` keys automatically, so existing configurations continue to work.
 
 **Config migration:** on first launch after an upgrade, any sensors added since the config was created are appended automatically (disabled, preserving all existing customisations).
 
@@ -157,8 +192,7 @@ The first 6 sensors (`cpu_temp`, `coolant`, `cpu_freq`, `cpu_util`, `cpu_power`,
 
 Path: `~/.config/th420-display/config.toml`
 
-The daemon hot-reloads the config on every file modification. The GUI writes changes
-immediately — no manual save step needed.
+The daemon hot-reloads the config on every file modification. The GUI writes changes immediately — no manual save step needed.
 
 ---
 
@@ -166,13 +200,15 @@ immediately — no manual save step needed.
 
 Two HID interfaces detected by packet size:
 
-| Interface | Packet | Role |
-|---|---|---|
-| **ctrl** | 440 bytes | Init handshake, frame-start, sensor queries |
+| Interface | Packet     | Role                                            |
+| --------- | ---------- | ----------------------------------------------- |
+| **ctrl**  | 440 bytes  | Init handshake, frame-start, sensor queries     |
 | **image** | 1024 bytes | JPEG chunks (1020-byte payload + 4-byte header) |
 
-**Frame:** JPEG split into 1020-byte chunks, each prefixed with `[0x08, idx, 0x00, 0x80/0x00]`.  
-**Keep-alive:** frame re-sent every ~800 ms.  
+**Frame:** JPEG split into 1020-byte chunks, each prefixed with `[0x08, idx, 0x00, 0x80/0x00]`.
+
+**Keep-alive:** frame re-sent every ~800 ms.
+
 **Coolant temp:** write `0x80 0x01 0x00 0x80` to ctrl; bytes [6:7] = big-endian u16 / 1000.0 °C.
 
 ---
@@ -200,5 +236,6 @@ cargo test --features gui    # all 46 tests including headless GUI tests
 
 ## Notes
 
-- **Personal project** — built for personal use on a specific hardware setup. No ongoing support, issue tracking, or compatibility guarantees are planned.
-- **Co-authored with [Claude](https://claude.ai)** (Anthropic) — protocol reverse-engineering, driver implementation, GUI, and tooling developed in pair-programming sessions with Claude Code.
+* **Personal project / fork** — this repository is maintained primarily for personal use and for users with similar hardware. No ongoing support, issue tracking, or compatibility guarantees are planned.
+* **Upstream project:** [messiahlap/th420-display](https://github.com/messiahlap/th420-display)
+* **Co-authored with [Claude](https://claude.ai)** (Anthropic) — protocol reverse-engineering, driver implementation, GUI, and tooling developed in pair-programming sessions with Claude Code.
