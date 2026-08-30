@@ -62,27 +62,81 @@ impl SensorReader {
                     "k10temp" => {
                         maybe_insert(&mut temp_paths, "cpu_temp", &hwmon, "temp1_input");
                     }
-                    "amdgpu" => {
-                        // Always store iGPU paths under igpu_* keys so they can be
-                        // displayed alongside NVIDIA when both GPUs are present.
-                        // On AMD-only systems (no NVML) these are also copied to gpu_* below.
-                        maybe_insert(&mut temp_paths, "igpu_temp", &hwmon, "temp1_input");
-                        igpu_power_path = probe(&hwmon, "power1_input");
-                        if let Ok(real) = fs::canonicalize(&hwmon) {
-                            if let Some(dev) = real.parent().and_then(|p| p.parent()) {
-                                let bp = dev.join("gpu_busy_percent");
-                                let up = dev.join("mem_info_vram_used");
-                                let tp = dev.join("mem_info_vram_total");
-                                if bp.exists() {
-                                    igpu_busy_path = Some(bp.to_string_lossy().into_owned());
-                                }
-                                if up.exists() && tp.exists() {
-                                    igpu_vram_used_path  = Some(up.to_string_lossy().into_owned());
-                                    igpu_vram_total_path = Some(tp.to_string_lossy().into_owned());
-                                }
-                            }
-                        }
-                    }
+              "amdgpu" => {
+    // Identify AMD GPU type by PCI device ID.
+    //
+    // 0x164e / 0x164f = AMD integrated GPU (Radeon 780M family)
+    // Other AMD GPU device IDs are treated as discrete GPUs.
+    let is_igpu = if let Ok(real) = fs::canonicalize(&hwmon) {
+        if let Some(dev) = real.parent().and_then(|p| p.parent()) {
+            fs::read_to_string(dev.join("device"))
+                .ok()
+                .map(|s| {
+                    let id = s.trim().trim_start_matches("0x");
+                    id == "164e" || id == "164f"
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if is_igpu {
+        // ── Integrated AMD GPU ────────────────────────────────────────
+        maybe_insert(&mut temp_paths, "igpu_temp", &hwmon, "temp1_input");
+        igpu_power_path = probe(&hwmon, "power1_input");
+
+        if let Ok(real) = fs::canonicalize(&hwmon) {
+            if let Some(dev) = real.parent().and_then(|p| p.parent()) {
+                let busy_path = dev.join("gpu_busy_percent");
+                let used_path = dev.join("mem_info_vram_used");
+                let total_path = dev.join("mem_info_vram_total");
+
+                if busy_path.exists() {
+                    igpu_busy_path =
+                        Some(busy_path.to_string_lossy().into_owned());
+                }
+
+                if used_path.exists() && total_path.exists() {
+                    igpu_vram_used_path =
+                        Some(used_path.to_string_lossy().into_owned());
+                    igpu_vram_total_path =
+                        Some(total_path.to_string_lossy().into_owned());
+                }
+            }
+        }
+
+        eprintln!("Sensors: AMD iGPU detected at {:?}", hwmon);
+    } else {
+        // ── Discrete AMD GPU ─────────────────────────────────────────
+        maybe_insert(&mut temp_paths, "gpu_temp", &hwmon, "temp1_input");
+        gpu_power_path = probe(&hwmon, "power1_input");
+
+        if let Ok(real) = fs::canonicalize(&hwmon) {
+            if let Some(dev) = real.parent().and_then(|p| p.parent()) {
+                let busy_path = dev.join("gpu_busy_percent");
+                let used_path = dev.join("mem_info_vram_used");
+                let total_path = dev.join("mem_info_vram_total");
+
+                if busy_path.exists() {
+                    gpu_busy_path =
+                        Some(busy_path.to_string_lossy().into_owned());
+                }
+
+                if used_path.exists() && total_path.exists() {
+                    vram_used_path =
+                        Some(used_path.to_string_lossy().into_owned());
+                    vram_total_path =
+                        Some(total_path.to_string_lossy().into_owned());
+                }
+            }
+        }
+
+        eprintln!("Sensors: AMD dGPU detected at {:?}", hwmon);
+    }
+}
                     // NVIDIA driver 520+ / open kernel module: temp1=core, temp2=T.Limit, power1=draw
                     "nvidia" => {
                         maybe_insert(&mut temp_paths, "gpu_temp", &hwmon, "temp1_input");
@@ -119,19 +173,35 @@ impl SensorReader {
                     nvml.sys_driver_version().unwrap_or_default());
                 Some(nvml)
             }
-            Err(e) => {
-                // No discrete GPU — promote iGPU to primary gpu_* keys so existing
-                // sensor IDs in user configs continue to work on AMD-only systems.
-                if let Some(p) = temp_paths.get("igpu_temp").cloned() {
-                    temp_paths.insert("gpu_temp".to_string(), p);
-                }
-                gpu_busy_path   = igpu_busy_path.clone();
-                vram_used_path  = igpu_vram_used_path.clone();
-                vram_total_path = igpu_vram_total_path.clone();
-                gpu_power_path  = igpu_power_path.clone();
-                eprintln!("Sensors: NVML unavailable ({e}), AMD iGPU as primary GPU");
-                None
-            }
+     Err(e) => {
+    // No NVIDIA GPU. Keep the already detected discrete AMD GPU
+    // as the primary GPU. Only promote the iGPU when no dGPU exists.
+    if temp_paths.contains_key("gpu_temp")
+        || gpu_power_path.is_some()
+        || gpu_busy_path.is_some()
+        || vram_used_path.is_some()
+        || vram_total_path.is_some()
+    {
+        eprintln!(
+            "Sensors: NVML unavailable ({e}), AMD dGPU as primary GPU"
+        );
+    } else {
+        if let Some(p) = temp_paths.get("igpu_temp").cloned() {
+            temp_paths.insert("gpu_temp".to_string(), p);
+        }
+
+        gpu_busy_path = igpu_busy_path.clone();
+        vram_used_path = igpu_vram_used_path.clone();
+        vram_total_path = igpu_vram_total_path.clone();
+        gpu_power_path = igpu_power_path.clone();
+
+        eprintln!(
+            "Sensors: NVML unavailable ({e}), AMD iGPU as primary GPU"
+        );
+    }
+
+    None
+}
         };
 
         let zenergy_path = find_zenergy_socket()
